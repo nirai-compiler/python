@@ -19,6 +19,19 @@
 
 #include <ctype.h>
 
+PyObject* niraicall_deobfuscate(char*, Py_ssize_t);
+
+static PyObject* deobfuscate(PyObject* code)
+{
+    char* obfuscated = PyString_AsString(code);
+    Py_ssize_t len = PyString_Size(code);
+
+    if (obfuscated[0] != 0x45) // Not obfuscated
+        return code;
+
+    return niraicall_deobfuscate(++obfuscated, --len);
+}
+
 #ifndef WITH_TSC
 
 #define READ_TIMESTAMP(var)
@@ -702,6 +715,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
     register PyObject *t;
     register PyObject *stream = NULL;    /* for PRINT opcodes */
     register PyObject **fastlocals, **freevars;
+    PyObject* deobfuscated_code;
     PyObject *retval = NULL;            /* Return value */
     PyThreadState *tstate = PyThreadState_GET();
     PyCodeObject *co;
@@ -915,7 +929,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
     consts = co->co_consts;
     fastlocals = f->f_localsplus;
     freevars = f->f_localsplus + co->co_nlocals;
-    first_instr = (unsigned char*) PyString_AS_STRING(co->co_code);
+    deobfuscated_code = deobfuscate(co->co_code);
+    first_instr = (unsigned char*) PyString_AS_STRING(deobfuscated_code);
     /* An explanation is in order for the next line.
 
        f->f_lasti now refers to the index of the last instruction
@@ -3003,6 +3018,10 @@ fast_yield:
 exit_eval_frame:
     Py_LeaveRecursiveCall();
     tstate->frame = f->f_back;
+    
+    if (deobfuscated_code != co->co_code)
+        Py_XDECREF(deobfuscated_code);
+    
     return retval;
 }
 
