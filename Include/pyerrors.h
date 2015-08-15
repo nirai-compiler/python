@@ -1,5 +1,6 @@
 #ifndef Py_ERRORS_H
 #define Py_ERRORS_H
+
 #ifdef __cplusplus
 extern "C" {
 #endif

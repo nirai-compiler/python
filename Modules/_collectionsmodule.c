@@ -8,9 +8,13 @@
 */
 
 /* The block length may be set to any number over 1.  Larger numbers
- * reduce the number of calls to the memory allocator but take more
- * memory.  Ideally, BLOCKLEN should be set with an eye to the
- * length of a cache line.
+ * reduce the number of calls to the memory allocator, give faster
+ * indexing and rotation, and reduce the link::data overhead ratio.
+ *
+ * Ideally, the block length will be set to two less than some
+ * multiple of the cache-line length (so that the full block
+ * including the leftlink and rightlink will fit neatly into
+ * cache lines).
  */
 
 #define BLOCKLEN 62
@@ -46,9 +50,9 @@
  */
 
 typedef struct BLOCK {
-    struct BLOCK *leftlink;
-    struct BLOCK *rightlink;
     PyObject *data[BLOCKLEN];
+    struct BLOCK *rightlink;
+    struct BLOCK *leftlink;
 } block;
 
 #define MAXFREEBLOCKS 10
@@ -58,13 +62,8 @@ static block *freeblocks[MAXFREEBLOCKS];
 static block *
 newblock(block *leftlink, block *rightlink, Py_ssize_t len) {
     block *b;
-    /* To prevent len from overflowing PY_SSIZE_T_MAX on 64-bit machines, we
-     * refuse to allocate new blocks if the current len is dangerously
-     * close.  There is some extra margin to prevent spurious arithmetic
-     * overflows at various places.  The following check ensures that
-     * the blocks allocated to the deque, in the worst case, can only
-     * have PY_SSIZE_T_MAX-2 entries in total.
-     */
+    /* To prevent len from overflowing PY_SSIZE_T_MAX on 32-bit machines, we
+     * refuse to allocate new blocks if the current len is nearing overflow. */
     if (len >= PY_SSIZE_T_MAX - 2*BLOCKLEN) {
         PyErr_SetString(PyExc_OverflowError,
                         "cannot add more blocks to the deque");
@@ -103,8 +102,8 @@ typedef struct {
     Py_ssize_t leftindex;       /* in range(BLOCKLEN) */
     Py_ssize_t rightindex;      /* in range(BLOCKLEN) */
     Py_ssize_t len;
-    Py_ssize_t maxlen;
     long state;         /* incremented whenever the indices move */
+    Py_ssize_t maxlen;
     PyObject *weakreflist; /* List of weak references */
 } dequeobject;
 
@@ -413,10 +412,9 @@ deque_inplace_concat(dequeobject *deque, PyObject *other)
 static int
 _deque_rotate(dequeobject *deque, Py_ssize_t n)
 {
-    Py_ssize_t i, len=deque->len, halflen=(len+1)>>1;
-    PyObject *item, *rv;
+    Py_ssize_t m, len=deque->len, halflen=len>>1;
 
-    if (len == 0)
+    if (len <= 1)
         return 0;
     if (n > halflen || n < -halflen) {
         n %= len;
@@ -425,24 +423,79 @@ _deque_rotate(dequeobject *deque, Py_ssize_t n)
         else if (n < -halflen)
             n += len;
     }
+    assert(len > 1);
+    assert(-halflen <= n && n <= halflen);
 
-    for (i=0 ; i<n ; i++) {
-        item = deque_pop(deque, NULL);
-        assert (item != NULL);
-        rv = deque_appendleft(deque, item);
-        Py_DECREF(item);
-        if (rv == NULL)
-            return -1;
-        Py_DECREF(rv);
+    deque->state++;
+    while (n > 0) {
+        if (deque->leftindex == 0) {
+            block *b = newblock(NULL, deque->leftblock, len);
+            if (b == NULL)
+                return -1;
+            assert(deque->leftblock->leftlink == NULL);
+            deque->leftblock->leftlink = b;
+            deque->leftblock = b;
+            deque->leftindex = BLOCKLEN;
+        }
+        assert(deque->leftindex > 0);
+
+        m = n;
+        if (m > deque->rightindex + 1)
+            m = deque->rightindex + 1;
+        if (m > deque->leftindex)
+            m = deque->leftindex;
+        assert (m > 0 && m <= len);
+        memcpy(&deque->leftblock->data[deque->leftindex - m],
+               &deque->rightblock->data[deque->rightindex + 1 - m],
+               m * sizeof(PyObject *));
+        deque->rightindex -= m;
+        deque->leftindex -= m;
+        n -= m;
+
+        if (deque->rightindex == -1) {
+            block *prevblock = deque->rightblock->leftlink;
+            assert(deque->rightblock != NULL);
+            assert(deque->leftblock != deque->rightblock);
+            freeblock(deque->rightblock);
+            prevblock->rightlink = NULL;
+            deque->rightblock = prevblock;
+            deque->rightindex = BLOCKLEN - 1;
+        }
     }
-    for (i=0 ; i>n ; i--) {
-        item = deque_popleft(deque, NULL);
-        assert (item != NULL);
-        rv = deque_append(deque, item);
-        Py_DECREF(item);
-        if (rv == NULL)
-            return -1;
-        Py_DECREF(rv);
+    while (n < 0) {
+        if (deque->rightindex == BLOCKLEN - 1) {
+            block *b = newblock(deque->rightblock, NULL, len);
+            if (b == NULL)
+                return -1;
+            assert(deque->rightblock->rightlink == NULL);
+            deque->rightblock->rightlink = b;
+            deque->rightblock = b;
+            deque->rightindex = -1;
+        }
+        assert (deque->rightindex < BLOCKLEN - 1);
+
+        m = -n;
+        if (m > BLOCKLEN - deque->leftindex)
+            m = BLOCKLEN - deque->leftindex;
+        if (m > BLOCKLEN - 1 - deque->rightindex)
+            m = BLOCKLEN - 1 - deque->rightindex;
+        assert (m > 0 && m <= len);
+        memcpy(&deque->rightblock->data[deque->rightindex + 1],
+               &deque->leftblock->data[deque->leftindex],
+               m * sizeof(PyObject *));
+        deque->leftindex += m;
+        deque->rightindex += m;
+        n += m;
+
+        if (deque->leftindex == BLOCKLEN) {
+            block *nextblock = deque->leftblock->rightlink;
+            assert(deque->leftblock != deque->rightblock);
+            freeblock(deque->leftblock);
+            assert(nextblock != NULL);
+            nextblock->leftlink = NULL;
+            deque->leftblock = nextblock;
+            deque->leftindex = 0;
+        }
     }
     return 0;
 }
@@ -588,7 +641,7 @@ deque_remove(dequeobject *deque, PyObject *value)
 PyDoc_STRVAR(remove_doc,
 "D.remove(value) -- remove first occurrence of value.");
 
-static int
+static void
 deque_clear(dequeobject *deque)
 {
     PyObject *item;
@@ -601,7 +654,6 @@ deque_clear(dequeobject *deque)
     assert(deque->leftblock == deque->rightblock &&
            deque->leftindex - 1 == deque->rightindex &&
            deque->len == 0);
-    return 0;
 }
 
 static PyObject *
@@ -704,10 +756,7 @@ deque_ass_item(dequeobject *deque, Py_ssize_t i, PyObject *v)
 static PyObject *
 deque_clearmethod(dequeobject *deque)
 {
-    int rv;
-
-    rv = deque_clear(deque);
-    assert (rv != -1);
+    deque_clear(deque);
     Py_RETURN_NONE;
 }
 
@@ -991,6 +1040,23 @@ deque_init(dequeobject *deque, PyObject *args, PyObject *kwdargs)
 }
 
 static PyObject *
+deque_sizeof(dequeobject *deque, void *unused)
+{
+    Py_ssize_t res;
+    Py_ssize_t blocks;
+
+    res = sizeof(dequeobject);
+    blocks = (deque->leftindex + deque->len + BLOCKLEN - 1) / BLOCKLEN;
+    assert(deque->leftindex + deque->len - 1 ==
+           (blocks - 1) * BLOCKLEN + deque->rightindex);
+    res += blocks * sizeof(block);
+    return PyLong_FromSsize_t(res);
+}
+
+PyDoc_STRVAR(sizeof_doc,
+"D.__sizeof__() -- size of D in memory, in bytes");
+
+static PyObject *
 deque_get_maxlen(dequeobject *deque)
 {
     if (deque->maxlen == -1)
@@ -1053,12 +1119,14 @@ static PyMethodDef deque_methods[] = {
     {"reverse",                 (PyCFunction)deque_reverse,
         METH_NOARGS,             reverse_doc},
     {"rotate",                  (PyCFunction)deque_rotate,
-        METH_VARARGS,           rotate_doc},
+        METH_VARARGS,            rotate_doc},
+    {"__sizeof__",              (PyCFunction)deque_sizeof,
+        METH_NOARGS,             sizeof_doc},
     {NULL,              NULL}   /* sentinel */
 };
 
 PyDoc_STRVAR(deque_doc,
-"deque(iterable[, maxlen]) --> deque object\n\
+"deque([iterable[, maxlen]]) --> deque object\n\
 \n\
 Build an ordered collection with optimized access from its endpoints.");
 
@@ -1544,11 +1612,13 @@ defdict_init(PyObject *self, PyObject *args, PyObject *kwds)
 }
 
 PyDoc_STRVAR(defdict_doc,
-"defaultdict(default_factory) --> dict with default factory\n\
+"defaultdict(default_factory[, ...]) --> dict with default factory\n\
 \n\
 The default factory is called without arguments to produce\n\
 a new value when a key is not present, in __getitem__ only.\n\
 A defaultdict compares equal to a dict with the same items.\n\
+All remaining arguments are treated the same as if they were\n\
+passed to the dict constructor, including keyword arguments.\n\
 ");
 
 /* See comment in xxsubtype.c */

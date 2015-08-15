@@ -192,8 +192,10 @@ PyTuple_Pack(Py_ssize_t n, ...)
 
     va_start(vargs, n);
     result = PyTuple_New(n);
-    if (result == NULL)
+    if (result == NULL) {
+        va_end(vargs);
         return NULL;
+    }
     items = ((PyTupleObject *)result)->ob_item;
     for (i = 0; i < n; i++) {
         o = va_arg(vargs, PyObject *);
@@ -879,8 +881,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
     _Py_ForgetReference((PyObject *) v);
     /* DECREF items deleted by shrinkage */
     for (i = newsize; i < oldsize; i++) {
-        Py_XDECREF(v->ob_item[i]);
-        v->ob_item[i] = NULL;
+        Py_CLEAR(v->ob_item[i]);
     }
     sv = PyObject_GC_Resize(PyTupleObject, v, newsize);
     if (sv == NULL) {
@@ -926,8 +927,7 @@ PyTuple_Fini(void)
 #if PyTuple_MAXSAVESIZE > 0
     /* empty tuples are used all over the place and applications may
      * rely on the fact that an empty tuple is a singleton. */
-    Py_XDECREF(free_list[0]);
-    free_list[0] = NULL;
+    Py_CLEAR(free_list[0]);
 
     (void)PyTuple_ClearFreeList();
 #endif

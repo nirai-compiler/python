@@ -162,7 +162,7 @@ static PyMemberDef code_memberlist[] = {
     {"co_nlocals",      T_INT,          OFF(co_nlocals),        READONLY},
     {"co_stacksize",T_INT,              OFF(co_stacksize),      READONLY},
     {"co_flags",        T_INT,          OFF(co_flags),          READONLY},
-    //{"co_code",         T_OBJECT,       OFF(co_code),           READONLY},
+    {"co_code",         T_OBJECT,       OFF(co_code),           READONLY},
     {"co_consts",       T_OBJECT,       OFF(co_consts),         READONLY},
     {"co_names",        T_OBJECT,       OFF(co_names),          READONLY},
     {"co_varnames",     T_OBJECT,       OFF(co_varnames),       READONLY},

@@ -401,14 +401,31 @@ teedataobject_traverse(teedataobject *tdo, visitproc visit, void * arg)
     return 0;
 }
 
+static void
+teedataobject_safe_decref(PyObject *obj)
+{
+    while (obj && Py_TYPE(obj) == &teedataobject_type &&
+           Py_REFCNT(obj) == 1) {
+        PyObject *nextlink = ((teedataobject *)obj)->nextlink;
+        ((teedataobject *)obj)->nextlink = NULL;
+        Py_DECREF(obj);
+        obj = nextlink;
+    }
+    Py_XDECREF(obj);
+}
+
 static int
 teedataobject_clear(teedataobject *tdo)
 {
     int i;
+    PyObject *tmp;
+
     Py_CLEAR(tdo->it);
     for (i=0 ; i<tdo->numread ; i++)
         Py_CLEAR(tdo->values[i]);
-    Py_CLEAR(tdo->nextlink);
+    tmp = tdo->nextlink;
+    tdo->nextlink = NULL;
+    teedataobject_safe_decref(tmp);
     return 0;
 }
 
@@ -475,6 +492,8 @@ tee_next(teeobject *to)
 
     if (to->index >= LINKCELLS) {
         link = teedataobject_jumplink(to->dataobj);
+        if (link == NULL)
+            return NULL;
         Py_DECREF(to->dataobj);
         to->dataobj = (teedataobject *)link;
         to->index = 0;
@@ -903,11 +922,13 @@ dropwhile_next(dropwhileobject *lz)
         }
         ok = PyObject_IsTrue(good);
         Py_DECREF(good);
-        if (!ok) {
+        if (ok == 0) {
             lz->start = 1;
             return item;
         }
         Py_DECREF(item);
+        if (ok < 0)
+            return NULL;
     }
 }
 
@@ -1043,10 +1064,11 @@ takewhile_next(takewhileobject *lz)
     }
     ok = PyObject_IsTrue(good);
     Py_DECREF(good);
-    if (ok)
+    if (ok > 0)
         return item;
     Py_DECREF(item);
-    lz->stop = 1;
+    if (ok == 0)
+        lz->stop = 1;
     return NULL;
 }
 
@@ -1219,19 +1241,22 @@ islice_next(isliceobject *lz)
     Py_ssize_t oldnext;
     PyObject *(*iternext)(PyObject *);
 
+    if (it == NULL)
+        return NULL;
+
     iternext = *Py_TYPE(it)->tp_iternext;
     while (lz->cnt < lz->next) {
         item = iternext(it);
         if (item == NULL)
-            return NULL;
+            goto empty;
         Py_DECREF(item);
         lz->cnt++;
     }
     if (stop != -1 && lz->cnt >= stop)
-        return NULL;
+        goto empty;
     item = iternext(it);
     if (item == NULL)
-        return NULL;
+        goto empty;
     lz->cnt++;
     oldnext = lz->next;
     /* The (size_t) cast below avoids the danger of undefined
@@ -1240,6 +1265,10 @@ islice_next(isliceobject *lz)
     if (lz->next < oldnext || (stop != -1 && lz->next > stop))
         lz->next = stop;
     return item;
+
+empty:
+    Py_CLEAR(lz->it);
+    return NULL;
 }
 
 PyDoc_STRVAR(islice_doc,
@@ -3001,9 +3030,11 @@ ifilter_next(ifilterobject *lz)
             ok = PyObject_IsTrue(good);
             Py_DECREF(good);
         }
-        if (ok)
+        if (ok > 0)
             return item;
         Py_DECREF(item);
+        if (ok < 0)
+            return NULL;
     }
 }
 
@@ -3144,9 +3175,11 @@ ifilterfalse_next(ifilterfalseobject *lz)
             ok = PyObject_IsTrue(good);
             Py_DECREF(good);
         }
-        if (!ok)
+        if (ok == 0)
             return item;
         Py_DECREF(item);
+        if (ok < 0)
+            return NULL;
     }
 }
 
@@ -3400,10 +3433,10 @@ PyDoc_STRVAR(count_doc,
 Return a count object whose .next() method returns consecutive values.\n\
 Equivalent to:\n\n\
     def count(firstval=0, step=1):\n\
-    x = firstval\n\
-    while 1:\n\
-        yield x\n\
-        x += step\n");
+        x = firstval\n\
+        while 1:\n\
+            yield x\n\
+            x += step\n");
 
 static PyTypeObject count_type = {
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -3650,14 +3683,17 @@ repeat_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     repeatobject *ro;
     PyObject *element;
-    Py_ssize_t cnt = -1;
+    Py_ssize_t cnt = -1, n_kwds = 0;
     static char *kwargs[] = {"object", "times", NULL};
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|n:repeat", kwargs,
                                      &element, &cnt))
         return NULL;
 
-    if (PyTuple_Size(args) == 2 && cnt < 0)
+    if (kwds != NULL)
+        n_kwds = PyDict_Size(kwds);
+    /* Does user supply times argument? */
+    if ((PyTuple_Size(args) + n_kwds == 2) && cnt < 0)
         cnt = 0;
 
     ro = (repeatobject *)type->tp_alloc(type, 0);

@@ -1,13 +1,10 @@
 # Nirai's Python
 
-This is a modified Python 2.7.5 source, prepared to be built staticly into Nirai.exe
+This is a modified Python 2.7.9 source, prepared to be built staticly into Nirai.exe.
 
-### Building on Windows
+### Building
 
-Open a VS 2010 command prompt and run `nmake`. If it works, `pythonembed.lib` should be created.
-
-### Building on Linux
-TBA
+Use the CMake script provided.
 
 Sources:
 

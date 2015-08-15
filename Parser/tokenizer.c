@@ -259,11 +259,25 @@ check_coding_spec(const char* line, Py_ssize_t size, struct tok_state *tok,
     char * cs;
     int r = 1;
 
-    if (tok->cont_line)
+    if (tok->cont_line) {
         /* It's a continuation line, so it can't be a coding spec. */
+        tok->read_coding_spec = 1;
         return 1;
+    }
     cs = get_coding_spec(line, size);
-    if (cs != NULL) {
+    if (!cs) {
+        Py_ssize_t i;
+        for (i = 0; i < size; i++) {
+            if (line[i] == '#' || line[i] == '\n' || line[i] == '\r')
+                break;
+            if (line[i] != ' ' && line[i] != '\t' && line[i] != '\014') {
+                /* Stop checking coding spec after a line containing
+                 * anything except a comment. */
+                tok->read_coding_spec = 1;
+                break;
+            }
+        }
+    } else {
         tok->read_coding_spec = 1;
         if (tok->encoding == NULL) {
             assert(tok->decoding_state == 1); /* raw */
@@ -277,8 +291,11 @@ check_coding_spec(const char* line, Py_ssize_t size, struct tok_state *tok,
                     tok->encoding = cs;
                     tok->decoding_state = -1;
                 }
-                else
+                else {
+                    PyErr_Format(PyExc_SyntaxError,
+                                 "encoding problem: %s", cs);
                     PyMem_FREE(cs);
+                }
 #else
                 /* Without Unicode support, we cannot
                    process the coding spec. Since there
@@ -289,14 +306,11 @@ check_coding_spec(const char* line, Py_ssize_t size, struct tok_state *tok,
             }
         } else {                /* then, compare cs with BOM */
             r = (strcmp(tok->encoding, cs) == 0);
+            if (!r)
+                PyErr_Format(PyExc_SyntaxError,
+                             "encoding problem: %s with BOM", cs);
             PyMem_FREE(cs);
         }
-    }
-    if (!r) {
-        cs = tok->encoding;
-        if (!cs)
-            cs = "with BOM";
-        PyErr_Format(PyExc_SyntaxError, "encoding problem: %s", cs);
     }
     return r;
 }
@@ -400,6 +414,12 @@ fp_readl(char *s, int size, struct tok_state *tok)
         buf = PyObject_CallObject(tok->decoding_readline, NULL);
         if (buf == NULL)
             return error_ret(tok);
+        if (!PyUnicode_Check(buf)) {
+            Py_DECREF(buf);
+            PyErr_SetString(PyExc_SyntaxError,
+                            "codec did not return a unicode object");
+            return error_ret(tok);
+        }
     } else {
         tok->decoding_buffer = NULL;
         if (PyString_CheckExact(buf))
@@ -528,7 +548,7 @@ decoding_fgets(char *s, int size, struct tok_state *tok)
             "Non-ASCII character '\\x%.2x' "
             "in file %.200s on line %i, "
             "but no encoding declared; "
-            "see http://www.python.org/peps/pep-0263.html for details",
+            "see http://python.org/dev/peps/pep-0263/ for details",
             badchar, tok->filename, tok->lineno + 1);
         PyErr_SetString(PyExc_SyntaxError, buf);
         return error_ret(tok);
@@ -682,7 +702,7 @@ decode_str(const char *input, int single, struct tok_state *tok)
     if (newl[0]) {
         if (!check_coding_spec(str, newl[0] - str, tok, buf_setreadl))
             return error_ret(tok);
-        if (tok->enc == NULL && newl[1]) {
+        if (tok->enc == NULL && !tok->read_coding_spec && newl[1]) {
             if (!check_coding_spec(newl[0]+1, newl[1] - newl[0],
                                    tok, buf_setreadl))
                 return error_ret(tok);
@@ -1494,15 +1514,24 @@ tok_get(register struct tok_state *tok, char **p_start, char **p_end)
                     } while (isdigit(c));
                 }
                 if (c == 'e' || c == 'E') {
-        exponent:
+                    int e;
+                  exponent:
+                    e = c;
                     /* Exponent part */
                     c = tok_nextc(tok);
-                    if (c == '+' || c == '-')
+                    if (c == '+' || c == '-') {
                         c = tok_nextc(tok);
-                    if (!isdigit(c)) {
-                        tok->done = E_TOKEN;
+                        if (!isdigit(c)) {
+                            tok->done = E_TOKEN;
+                            tok_backup(tok, c);
+                            return ERRORTOKEN;
+                        }
+                    } else if (!isdigit(c)) {
                         tok_backup(tok, c);
-                        return ERRORTOKEN;
+                        tok_backup(tok, e);
+                        *p_start = tok->start;
+                        *p_end = tok->cur;
+                        return NUMBER;
                     }
                     do {
                         c = tok_nextc(tok);

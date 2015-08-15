@@ -1,4 +1,4 @@
-"""HTTP cookie handling for web clients.
+r"""HTTP cookie handling for web clients.
 
 This module has (now fairly distant) origins in Gisle Aas' Perl module
 HTTP::Cookies, from the libwww-perl library.
@@ -1719,12 +1719,12 @@ class CookieJar:
     def __repr__(self):
         r = []
         for cookie in self: r.append(repr(cookie))
-        return "<%s[%s]>" % (self.__class__, ", ".join(r))
+        return "<%s[%s]>" % (self.__class__.__name__, ", ".join(r))
 
     def __str__(self):
         r = []
         for cookie in self: r.append(str(cookie))
-        return "<%s[%s]>" % (self.__class__, ", ".join(r))
+        return "<%s[%s]>" % (self.__class__.__name__, ", ".join(r))
 
 
 # derives from IOError for backwards-compatibility with Python 2.4.0

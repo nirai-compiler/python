@@ -1371,13 +1371,28 @@ s_init(PyObject *self, PyObject *args, PyObject *kwds)
 
     assert(PyStruct_Check(self));
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "S:Struct", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O:Struct", kwlist,
                                      &o_format))
         return -1;
 
-    Py_INCREF(o_format);
-    Py_CLEAR(soself->s_format);
-    soself->s_format = o_format;
+    if (PyString_Check(o_format)) {
+        Py_INCREF(o_format);
+        Py_CLEAR(soself->s_format);
+        soself->s_format = o_format;
+    }
+    else if (PyUnicode_Check(o_format)) {
+        PyObject *str = PyUnicode_AsEncodedString(o_format, "ascii", NULL);
+        if (str == NULL)
+            return -1;
+        Py_CLEAR(soself->s_format);
+        soself->s_format = str;
+    }
+    else {
+        PyErr_Format(PyExc_TypeError,
+                     "Struct() argument 1 must be string, not %s",
+                     Py_TYPE(o_format)->tp_name);
+        return -1;
+    }
 
     ret = prepare_s(soself);
     return ret;
@@ -1439,6 +1454,7 @@ strings.");
 static PyObject *
 s_unpack(PyObject *self, PyObject *inputstr)
 {
+    Py_buffer buf;
     char *start;
     Py_ssize_t len;
     PyObject *args=NULL, *result;
@@ -1454,12 +1470,17 @@ s_unpack(PyObject *self, PyObject *inputstr)
     args = PyTuple_Pack(1, inputstr);
     if (args == NULL)
         return NULL;
-    if (!PyArg_ParseTuple(args, "s#:unpack", &start, &len))
+    if (!PyArg_ParseTuple(args, "s*:unpack", &buf))
         goto fail;
-    if (soself->s_size != len)
+    start = buf.buf;
+    len = buf.len;
+    if (soself->s_size != len) {
+        PyBuffer_Release(&buf);
         goto fail;
+    }
     result = s_unpack_internal(soself, start);
     Py_DECREF(args);
+    PyBuffer_Release(&buf);
     return result;
 
 fail:
@@ -1482,24 +1503,24 @@ static PyObject *
 s_unpack_from(PyObject *self, PyObject *args, PyObject *kwds)
 {
     static char *kwlist[] = {"buffer", "offset", 0};
-#if (PY_VERSION_HEX < 0x02050000)
-    static char *fmt = "z#|i:unpack_from";
-#else
-    static char *fmt = "z#|n:unpack_from";
-#endif
+    static char *fmt = "z*|n:unpack_from";
+    Py_buffer buf;
     Py_ssize_t buffer_len = 0, offset = 0;
     char *buffer = NULL;
     PyStructObject *soself = (PyStructObject *)self;
+    PyObject *result;
     assert(PyStruct_Check(self));
     assert(soself->s_codes != NULL);
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, fmt, kwlist,
-                                     &buffer, &buffer_len, &offset))
+                                     &buf, &offset))
         return NULL;
-
+    buffer = buf.buf;
+    buffer_len = buf.len;
     if (buffer == NULL) {
         PyErr_Format(StructError,
             "unpack_from requires a buffer argument");
+        PyBuffer_Release(&buf);
         return NULL;
     }
 
@@ -1510,9 +1531,12 @@ s_unpack_from(PyObject *self, PyObject *args, PyObject *kwds)
         PyErr_Format(StructError,
             "unpack_from requires a buffer of at least %zd bytes",
             soself->s_size);
+        PyBuffer_Release(&buf);
         return NULL;
     }
-    return s_unpack_internal(soself, buffer + offset);
+    result = s_unpack_internal(soself, buffer + offset);
+    PyBuffer_Release(&buf);
+    return result;
 }
 
 
@@ -1603,7 +1627,7 @@ s_pack(PyObject *self, PyObject *args)
     if (PyTuple_GET_SIZE(args) != soself->s_len)
     {
         PyErr_Format(StructError,
-            "pack requires exactly %zd arguments", soself->s_len);
+            "pack expected %zd items for packing (got %zd)", soself->s_len, PyTuple_GET_SIZE(args));
         return NULL;
     }
 
@@ -1642,9 +1666,19 @@ s_pack_into(PyObject *self, PyObject *args)
     assert(soself->s_codes != NULL);
     if (PyTuple_GET_SIZE(args) != (soself->s_len + 2))
     {
-        PyErr_Format(StructError,
-                     "pack_into requires exactly %zd arguments",
-                     (soself->s_len + 2));
+        if (PyTuple_GET_SIZE(args) == 0) {
+            PyErr_Format(StructError,
+                        "pack_into expected buffer argument");
+        }
+        else if (PyTuple_GET_SIZE(args) == 1) {
+            PyErr_Format(StructError,
+                        "pack_into expected offset argument");
+        }
+        else {
+            PyErr_Format(StructError,
+                        "pack_into expected %zd items for packing (got %zd)",
+                        soself->s_len, (PyTuple_GET_SIZE(args) - 2));
+        }
         return NULL;
     }
 
@@ -1693,6 +1727,18 @@ s_get_size(PyStructObject *self, void *unused)
     return PyInt_FromSsize_t(self->s_size);
 }
 
+PyDoc_STRVAR(s_sizeof__doc__,
+"S.__sizeof__() -> size of S in memory, in bytes");
+
+static PyObject *
+s_sizeof(PyStructObject *self, void *unused)
+{
+    Py_ssize_t size;
+
+    size = sizeof(PyStructObject) + sizeof(formatcode) * (self->s_len + 1);
+    return PyLong_FromSsize_t(size);
+}
+
 /* List of functions */
 
 static struct PyMethodDef s_methods[] = {
@@ -1701,6 +1747,7 @@ static struct PyMethodDef s_methods[] = {
     {"unpack",          s_unpack,       METH_O, s_unpack__doc__},
     {"unpack_from",     (PyCFunction)s_unpack_from, METH_VARARGS|METH_KEYWORDS,
                     s_unpack_from__doc__},
+    {"__sizeof__",      (PyCFunction)s_sizeof, METH_NOARGS, s_sizeof__doc__},
     {NULL,       NULL}          /* sentinel */
 };
 

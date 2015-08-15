@@ -208,8 +208,12 @@ _set_bool(const char *name, int *target, PyObject *src, int dflt)
 {
     if (src == NULL)
         *target = dflt;
-    else
-        *target = PyObject_IsTrue(src);
+    else {
+        int b = PyObject_IsTrue(src);
+        if (b < 0)
+            return -1;
+        *target = b;
+    }
     return 0;
 }
 
@@ -235,19 +239,24 @@ _set_char(const char *name, char *target, PyObject *src, char dflt)
     if (src == NULL)
         *target = dflt;
     else {
-        if (src == Py_None || PyString_Size(src) == 0)
-            *target = '\0';
-        else if (!PyString_Check(src) || PyString_Size(src) != 1) {
-            PyErr_Format(PyExc_TypeError,
-                         "\"%s\" must be an 1-character string",
-                         name);
-            return -1;
-        }
-        else {
-            char *s = PyString_AsString(src);
-            if (s == NULL)
+        *target = '\0';
+        if (src != Py_None) {
+            Py_ssize_t len;
+            if (!PyString_Check(src)) {
+                PyErr_Format(PyExc_TypeError,
+                    "\"%s\" must be string, not %.200s", name,
+                    src->ob_type->tp_name);
                 return -1;
-            *target = s[0];
+            }
+            len = PyString_GET_SIZE(src);
+            if (len > 1) {
+                PyErr_Format(PyExc_TypeError,
+                    "\"%s\" must be an 1-character string",
+                    name);
+                return -1;
+            }
+            if (len > 0)
+                *target = *PyString_AS_STRING(src);
         }
     }
     return 0;
@@ -263,7 +272,7 @@ _set_str(const char *name, PyObject **target, PyObject *src, const char *dflt)
             *target = NULL;
         else if (!IS_BASESTRING(src)) {
             PyErr_Format(PyExc_TypeError,
-                         "\"%s\" must be an string", name);
+                         "\"%s\" must be a string", name);
             return -1;
         }
         else {
@@ -422,7 +431,8 @@ dialect_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
     if (dialect_check_quoting(self->quoting))
         goto err;
     if (self->delimiter == 0) {
-        PyErr_SetString(PyExc_TypeError, "delimiter must be set");
+        PyErr_SetString(PyExc_TypeError,
+                        "\"delimiter\" must be an 1-character string");
         goto err;
     }
     if (quotechar == Py_None && quoting == NULL)
@@ -784,9 +794,13 @@ Reader_iternext(ReaderObj *self)
         lineobj = PyIter_Next(self->input_iter);
         if (lineobj == NULL) {
             /* End of input OR exception */
-            if (!PyErr_Occurred() && self->field_len != 0)
-                PyErr_Format(error_obj,
-                             "newline inside string");
+            if (!PyErr_Occurred() && (self->field_len != 0 ||
+                                      self->state == IN_QUOTED_FIELD)) {
+                if (self->dialect->strict)
+                    PyErr_SetString(error_obj, "unexpected end of data");
+                else if (parse_save_field(self) >= 0 )
+                    break;
+            }
             return NULL;
         }
         ++self->line_num;

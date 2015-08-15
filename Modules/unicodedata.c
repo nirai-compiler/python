@@ -274,7 +274,7 @@ unicodedata_category(PyObject *self, PyObject *args)
 PyDoc_STRVAR(unicodedata_bidirectional__doc__,
 "bidirectional(unichr)\n\
 \n\
-Returns the bidirectional category assigned to the Unicode character\n\
+Returns the bidirectional class assigned to the Unicode character\n\
 unichr as string. If no such value is defined, an empty string is\n\
 returned.");
 
@@ -506,7 +506,7 @@ nfd_nfkd(PyObject *self, PyObject *input, int k)
 
     stackptr = 0;
     isize = PyUnicode_GET_SIZE(input);
-    /* Overallocate atmost 10 characters. */
+    /* Overallocate at most 10 characters. */
     space = (isize > 10 ? 10 : isize) + isize;
     result = PyUnicode_FromUnicode(NULL, space);
     if (!result)
@@ -520,7 +520,7 @@ nfd_nfkd(PyObject *self, PyObject *input, int k)
         while(stackptr) {
             Py_UNICODE code = stack[--stackptr];
             /* Hangul Decomposition adds three characters in
-               a single step, so we need atleast that much room. */
+               a single step, so we need at least that much room. */
             if (space < 3) {
                 Py_ssize_t newsize = PyString_GET_SIZE(result) + 10;
                 space += 10;

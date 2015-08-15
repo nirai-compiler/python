@@ -47,6 +47,7 @@ typedef struct {
     int fd;
     unsigned int readable : 1;
     unsigned int writable : 1;
+    unsigned int appending : 1;
     signed int seekable : 2; /* -1 means unknown */
     unsigned int closefd : 1;
     PyObject *weakreflist;
@@ -124,6 +125,7 @@ fileio_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         self->fd = -1;
         self->readable = 0;
         self->writable = 0;
+        self->appending = 0;
         self->seekable = -1;
         self->closefd = 1;
         self->weakreflist = NULL;
@@ -137,22 +139,15 @@ fileio_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
    directories, so we need a check.  */
 
 static int
-dircheck(fileio* self, const char *name)
+dircheck(fileio* self, PyObject *nameobj)
 {
 #if defined(HAVE_FSTAT) && defined(S_IFDIR) && defined(EISDIR)
     struct stat buf;
     if (self->fd < 0)
         return 0;
     if (fstat(self->fd, &buf) == 0 && S_ISDIR(buf.st_mode)) {
-        char *msg = strerror(EISDIR);
-        PyObject *exc;
-        if (internal_close(self))
-            return -1;
-
-        exc = PyObject_CallFunction(PyExc_IOError, "(iss)",
-                                    EISDIR, msg, name);
-        PyErr_SetObject(PyExc_IOError, exc);
-        Py_XDECREF(exc);
+        errno = EISDIR;
+        PyErr_SetFromErrnoWithFilenameObject(PyExc_IOError, nameobj);
         return -1;
     }
 #endif
@@ -191,16 +186,21 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
     Py_UNICODE *widename = NULL;
 #endif
     int ret = 0;
-    int rwa = 0, plus = 0, append = 0;
+    int rwa = 0, plus = 0;
     int flags = 0;
     int fd = -1;
     int closefd = 1;
+    int fd_is_own = 0;
 
     assert(PyFileIO_Check(oself));
     if (self->fd >= 0) {
-        /* Have to close the existing file first. */
-        if (internal_close(self) < 0)
-            return -1;
+        if (self->closefd) {
+            /* Have to close the existing file first. */
+            if (internal_close(self) < 0)
+                return -1;
+        }
+        else
+            self->fd = -1;
     }
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|si:fileio",
@@ -213,7 +213,7 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    fd = PyLong_AsLong(nameobj);
+    fd = _PyLong_AsInt(nameobj);
     if (fd < 0) {
         if (!PyErr_Occurred()) {
             PyErr_SetString(PyExc_ValueError,
@@ -281,8 +281,8 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
                 goto bad_mode;
             rwa = 1;
             self->writable = 1;
-            flags |= O_CREAT;
-            append = 1;
+            self->appending = 1;
+            flags |= O_APPEND | O_CREAT;
             break;
         case 'b':
             break;
@@ -313,11 +313,6 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
     flags |= O_BINARY;
 #endif
 
-#ifdef O_APPEND
-    if (append)
-        flags |= O_APPEND;
-#endif
-
     if (fd >= 0) {
         if (check_fd(fd))
             goto error;
@@ -341,6 +336,7 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
 #endif
             self->fd = open(name, flags, 0666);
         Py_END_ALLOW_THREADS
+        fd_is_own = 1;
         if (self->fd < 0) {
 #ifdef MS_WINDOWS
             if (widename != NULL)
@@ -350,31 +346,29 @@ fileio_init(PyObject *oself, PyObject *args, PyObject *kwds)
                 PyErr_SetFromErrnoWithFilename(PyExc_IOError, name);
             goto error;
         }
-        if(dircheck(self, name) < 0)
-            goto error;
     }
+    if (dircheck(self, nameobj) < 0)
+        goto error;
 
     if (PyObject_SetAttrString((PyObject *)self, "name", nameobj) < 0)
         goto error;
 
-    if (append) {
+    if (self->appending) {
         /* For consistent behaviour, we explicitly seek to the
            end of file (otherwise, it might be done only on the
            first write()). */
         PyObject *pos = portable_lseek(self->fd, NULL, 2);
-        if (pos == NULL) {
-            if (closefd) {
-                close(self->fd);
-                self->fd = -1;
-            }
+        if (pos == NULL)
             goto error;
-        }
         Py_DECREF(pos);
     }
 
     goto done;
 
  error:
+    if (!fd_is_own)
+        self->fd = -1;
+
     ret = -1;
 
  done:
@@ -533,7 +527,7 @@ fileio_readall(fileio *self)
 {
     PyObject *result;
     Py_ssize_t total = 0;
-    int n;
+    Py_ssize_t n;
 
     if (self->fd < 0)
         return err_closed();
@@ -555,27 +549,37 @@ fileio_readall(fileio *self)
         }
 
         if (PyBytes_GET_SIZE(result) < (Py_ssize_t)newsize) {
-            if (_PyBytes_Resize(&result, newsize) < 0) {
-                if (total == 0) {
-                    Py_DECREF(result);
-                    return NULL;
-                }
-                PyErr_Clear();
-                break;
-            }
+            if (_PyBytes_Resize(&result, newsize) < 0)
+                return NULL; /* result has been freed */
         }
         Py_BEGIN_ALLOW_THREADS
         errno = 0;
+        n = newsize - total;
+#if defined(MS_WIN64) || defined(MS_WINDOWS)
+        if (n > INT_MAX)
+            n = INT_MAX;
         n = read(self->fd,
                  PyBytes_AS_STRING(result) + total,
-                 newsize - total);
+                 (int)n);
+#else
+        n = read(self->fd,
+                 PyBytes_AS_STRING(result) + total,
+                 n);
+#endif
         Py_END_ALLOW_THREADS
         if (n == 0)
             break;
         if (n < 0) {
-            if (total > 0)
-                break;
+            if (errno == EINTR) {
+                if (PyErr_CheckSignals()) {
+                    Py_DECREF(result);
+                    return NULL;
+                }
+                continue;
+            }
             if (errno == EAGAIN) {
+                if (total > 0)
+                    break;
                 Py_DECREF(result);
                 Py_RETURN_NONE;
             }
@@ -589,7 +593,6 @@ fileio_readall(fileio *self)
     if (PyBytes_GET_SIZE(result) > total) {
         if (_PyBytes_Resize(&result, total) < 0) {
             /* This should never happen, but just in case */
-            Py_DECREF(result);
             return NULL;
         }
     }
@@ -646,10 +649,8 @@ fileio_read(fileio *self, PyObject *args)
     }
 
     if (n != size) {
-        if (_PyBytes_Resize(&bytes, n) < 0) {
-            Py_DECREF(bytes);
+        if (_PyBytes_Resize(&bytes, n) < 0)
             return NULL;
-        }
     }
 
     return (PyObject *) bytes;
@@ -885,7 +886,13 @@ fileio_truncate(fileio *self, PyObject *args)
 static char *
 mode_string(fileio *self)
 {
-    if (self->readable) {
+    if (self->appending) {
+        if (self->readable)
+            return "ab+";
+        else
+            return "ab";
+    }
+    else if (self->readable) {
         if (self->writable)
             return "rb+";
         else
@@ -973,7 +980,8 @@ PyDoc_STRVAR(fileno_doc,
 "This is needed for lower-level file interfaces, such the fcntl module.");
 
 PyDoc_STRVAR(seek_doc,
-"seek(offset: int[, whence: int]) -> None.  Move to new file position.\n"
+"seek(offset: int[, whence: int]) -> int.  Move to new file position\n"
+"and return the file position.\n"
 "\n"
 "Argument offset is a byte count.  Optional argument whence defaults to\n"
 "0 (offset from start of file, offset should be >= 0); other values are 1\n"
@@ -985,9 +993,10 @@ PyDoc_STRVAR(seek_doc,
 
 #ifdef HAVE_FTRUNCATE
 PyDoc_STRVAR(truncate_doc,
-"truncate([size: int]) -> None.  Truncate the file to at most size bytes.\n"
+"truncate([size: int]) -> int.  Truncate the file to at most size bytes and\n"
+"return the truncated size.\n"
 "\n"
-"Size defaults to the current file position, as returned by tell()."
+"Size defaults to the current file position, as returned by tell().\n"
 "The current file position is changed to the value of size.");
 #endif
 

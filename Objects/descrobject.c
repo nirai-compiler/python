@@ -254,14 +254,51 @@ static PyObject *
 classmethoddescr_call(PyMethodDescrObject *descr, PyObject *args,
                       PyObject *kwds)
 {
-    PyObject *func, *result;
+    Py_ssize_t argc;
+    PyObject *self, *func, *result;
 
-    func = PyCFunction_New(descr->d_method, (PyObject *)descr->d_type);
+    /* Make sure that the first argument is acceptable as 'self' */
+    assert(PyTuple_Check(args));
+    argc = PyTuple_GET_SIZE(args);
+    if (argc < 1) {
+        PyErr_Format(PyExc_TypeError,
+                     "descriptor '%s' of '%.100s' "
+                     "object needs an argument",
+                     descr_name((PyDescrObject *)descr),
+                     descr->d_type->tp_name);
+        return NULL;
+    }
+    self = PyTuple_GET_ITEM(args, 0);
+    if (!PyType_Check(self)) {
+        PyErr_Format(PyExc_TypeError,
+                     "descriptor '%s' requires a type "
+                     "but received a '%.100s'",
+                     descr_name((PyDescrObject *)descr),
+                     self->ob_type->tp_name);
+        return NULL;
+    }
+    if (!PyType_IsSubtype((PyTypeObject *)self, descr->d_type)) {
+        PyErr_Format(PyExc_TypeError,
+                     "descriptor '%s' "
+                     "requires a subtype of '%.100s' "
+                     "but received '%.100s",
+                     descr_name((PyDescrObject *)descr),
+                     descr->d_type->tp_name,
+                     self->ob_type->tp_name);
+        return NULL;
+    }
+
+    func = PyCFunction_New(descr->d_method, self);
     if (func == NULL)
         return NULL;
-
+    args = PyTuple_GetSlice(args, 1, argc);
+    if (args == NULL) {
+        Py_DECREF(func);
+        return NULL;
+    }
     result = PyEval_CallObjectWithKeywords(func, args, kwds);
     Py_DECREF(func);
+    Py_DECREF(args);
     return result;
 }
 
@@ -1326,21 +1363,25 @@ PyDoc_STRVAR(property_doc,
 "\n"
 "fget is a function to be used for getting an attribute value, and likewise\n"
 "fset is a function for setting, and fdel a function for del'ing, an\n"
-"attribute.  Typical use is to define a managed attribute x:\n"
+"attribute.  Typical use is to define a managed attribute x:\n\n"
 "class C(object):\n"
 "    def getx(self): return self._x\n"
 "    def setx(self, value): self._x = value\n"
 "    def delx(self): del self._x\n"
 "    x = property(getx, setx, delx, \"I'm the 'x' property.\")\n"
 "\n"
-"Decorators make defining new properties or modifying existing ones easy:\n"
+"Decorators make defining new properties or modifying existing ones easy:\n\n"
 "class C(object):\n"
 "    @property\n"
-"    def x(self): return self._x\n"
+"    def x(self):\n"
+"        \"I am the 'x' property.\"\n"
+"        return self._x\n"
 "    @x.setter\n"
-"    def x(self, value): self._x = value\n"
+"    def x(self, value):\n"
+"        self._x = value\n"
 "    @x.deleter\n"
-"    def x(self): del self._x\n"
+"    def x(self):\n"
+"        del self._x\n"
 );
 
 static int

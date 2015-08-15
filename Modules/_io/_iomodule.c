@@ -58,8 +58,8 @@ PyDoc_STRVAR(module_doc,
 "\n"
 "At the top of the I/O hierarchy is the abstract base class IOBase. It\n"
 "defines the basic interface to a stream. Note, however, that there is no\n"
-"seperation between reading and writing to streams; implementations are\n"
-"allowed to throw an IOError if they do not support a given operation.\n"
+"separation between reading and writing to streams; implementations are\n"
+"allowed to raise an IOError if they do not support a given operation.\n"
 "\n"
 "Extending IOBase is RawIOBase which deals simply with the reading and\n"
 "writing of raw bytes to a stream. FileIO subclasses RawIOBase to provide\n"
@@ -300,9 +300,10 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
     int text = 0, binary = 0, universal = 0;
 
     char rawmode[5], *m;
-    int line_buffering, isatty;
+    int line_buffering;
+    long isatty;
 
-    PyObject *raw, *modeobj = NULL, *buffer = NULL, *wrapper = NULL;
+    PyObject *raw, *modeobj = NULL, *buffer, *wrapper, *result = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|sizzzi:open", kwlist,
                                      &file, &mode, &buffering,
@@ -415,6 +416,7 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
 				"Osi", file, rawmode, closefd);
     if (raw == NULL)
         return NULL;
+    result = raw;
 
     modeobj = PyUnicode_FromString(mode);
     if (modeobj == NULL)
@@ -443,12 +445,12 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
 #ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
         {
             struct stat st;
-            long fileno;
+            int fileno;
             PyObject *res = PyObject_CallMethod(raw, "fileno", NULL);
             if (res == NULL)
                 goto error;
 
-            fileno = PyInt_AsLong(res);
+            fileno = _PyInt_AsInt(res);
             Py_DECREF(res);
             if (fileno == -1 && PyErr_Occurred())
                 goto error;
@@ -473,7 +475,7 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
         }
 
         Py_DECREF(modeobj);
-        return raw;
+        return result;
     }
 
     /* wraps into a buffered file */
@@ -494,15 +496,16 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
 
         buffer = PyObject_CallFunction(Buffered_class, "Oi", raw, buffering);
     }
-    Py_CLEAR(raw);
     if (buffer == NULL)
         goto error;
+    result = buffer;
+    Py_DECREF(raw);
 
 
     /* if binary, returns the buffered file */
     if (binary) {
         Py_DECREF(modeobj);
-        return buffer;
+        return result;
     }
 
     /* wraps into a TextIOWrapper */
@@ -511,20 +514,32 @@ io_open(PyObject *self, PyObject *args, PyObject *kwds)
 				    buffer,
 				    encoding, errors, newline,
 				    line_buffering);
-    Py_CLEAR(buffer);
     if (wrapper == NULL)
         goto error;
+    result = wrapper;
+    Py_DECREF(buffer);
 
     if (PyObject_SetAttrString(wrapper, "mode", modeobj) < 0)
         goto error;
     Py_DECREF(modeobj);
-    return wrapper;
+    return result;
 
   error:
-    Py_XDECREF(raw);
+    if (result != NULL) {
+        PyObject *exc, *val, *tb, *close_result;
+        PyErr_Fetch(&exc, &val, &tb);
+        close_result = PyObject_CallMethod(result, "close", NULL);
+        if (close_result != NULL) {
+            Py_DECREF(close_result);
+            PyErr_Restore(exc, val, tb);
+        } else {
+            Py_XDECREF(exc);
+            Py_XDECREF(val);
+            Py_XDECREF(tb);
+        }
+        Py_DECREF(result);
+    }
     Py_XDECREF(modeobj);
-    Py_XDECREF(buffer);
-    Py_XDECREF(wrapper);
     return NULL;
 }
 

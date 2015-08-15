@@ -726,6 +726,10 @@ PyObject *PyString_DecodeEscape(const char *s,
                              errors);
                 goto failed;
             }
+            /* skip \x */
+            if (s < end && isxdigit(Py_CHARMASK(s[0])))
+                s++; /* and a hexdigit */
+            break;
 #ifndef Py_USING_UNICODE
         case 'u':
         case 'U':
@@ -744,8 +748,8 @@ PyObject *PyString_DecodeEscape(const char *s,
                              UTF-8 bytes may follow. */
         }
     }
-    if (p-buf < newlen && _PyString_Resize(&v, p - buf))
-        goto failed;
+    if (p-buf < newlen)
+        _PyString_Resize(&v, p - buf); /* v is cleared on error */
     return v;
   failed:
     Py_DECREF(v);
@@ -878,9 +882,9 @@ string_print(PyStringObject *op, FILE *fp, int flags)
             size -= chunk_size;
         }
 #ifdef __VMS
-        if (size) fwrite(data, (int)size, 1, fp);
+        if (size) fwrite(data, (size_t)size, 1, fp);
 #else
-        fwrite(data, 1, (int)size, fp);
+        fwrite(data, 1, (size_t)size, fp);
 #endif
         Py_END_ALLOW_THREADS
         return 0;
@@ -922,13 +926,14 @@ PyObject *
 PyString_Repr(PyObject *obj, int smartquotes)
 {
     register PyStringObject* op = (PyStringObject*) obj;
-    size_t newsize = 2 + 4 * Py_SIZE(op);
+    size_t newsize;
     PyObject *v;
-    if (newsize > PY_SSIZE_T_MAX || newsize / 4 != Py_SIZE(op)) {
+    if (Py_SIZE(op) > (PY_SSIZE_T_MAX - 2)/4) {
         PyErr_SetString(PyExc_OverflowError,
             "string is too large to make repr");
         return NULL;
     }
+    newsize = 2 + 4*Py_SIZE(op);
     v = PyString_FromStringAndSize((char *)NULL, newsize);
     if (v == NULL) {
         return NULL;
@@ -1251,7 +1256,6 @@ _PyString_Eq(PyObject *o1, PyObject *o2)
     PyStringObject *a = (PyStringObject*) o1;
     PyStringObject *b = (PyStringObject*) o2;
     return Py_SIZE(a) == Py_SIZE(b)
-      && *a->ob_sval == *b->ob_sval
       && memcmp(a->ob_sval, b->ob_sval, Py_SIZE(a)) == 0;
 }
 
@@ -1591,7 +1595,7 @@ string_join(PyStringObject *self, PyObject *orig)
     Py_ssize_t i;
     PyObject *seq, *item;
 
-    seq = PySequence_Fast(orig, "");
+    seq = PySequence_Fast(orig, "can only join an iterable");
     if (seq == NULL) {
         return NULL;
     }
@@ -2328,7 +2332,7 @@ return_self(PyStringObject *self)
 }
 
 Py_LOCAL_INLINE(Py_ssize_t)
-countchar(const char *target, int target_len, char c, Py_ssize_t maxcount)
+countchar(const char *target, Py_ssize_t target_len, char c, Py_ssize_t maxcount)
 {
     Py_ssize_t count=0;
     const char *start=target;
@@ -3088,24 +3092,25 @@ string_expandtabs(PyStringObject *self, PyObject *args)
     i = 0; /* chars up to and including most recent \n or \r */
     j = 0; /* chars since most recent \n or \r (use in tab calculations) */
     e = PyString_AS_STRING(self) + PyString_GET_SIZE(self); /* end of input */
-    for (p = PyString_AS_STRING(self); p < e; p++)
-    if (*p == '\t') {
-        if (tabsize > 0) {
-            incr = tabsize - (j % tabsize);
-            if (j > PY_SSIZE_T_MAX - incr)
-                goto overflow1;
-            j += incr;
+    for (p = PyString_AS_STRING(self); p < e; p++) {
+        if (*p == '\t') {
+            if (tabsize > 0) {
+                incr = tabsize - (j % tabsize);
+                if (j > PY_SSIZE_T_MAX - incr)
+                    goto overflow1;
+                j += incr;
+            }
         }
-    }
-    else {
-        if (j > PY_SSIZE_T_MAX - 1)
-            goto overflow1;
-        j++;
-        if (*p == '\n' || *p == '\r') {
-            if (i > PY_SSIZE_T_MAX - j)
+        else {
+            if (j > PY_SSIZE_T_MAX - 1)
                 goto overflow1;
-            i += j;
-            j = 0;
+            j++;
+            if (*p == '\n' || *p == '\r') {
+                if (i > PY_SSIZE_T_MAX - j)
+                    goto overflow1;
+                i += j;
+                j = 0;
+            }
         }
     }
 
@@ -3121,25 +3126,26 @@ string_expandtabs(PyStringObject *self, PyObject *args)
     q = PyString_AS_STRING(u); /* next output char */
     qe = PyString_AS_STRING(u) + PyString_GET_SIZE(u); /* end of output */
 
-    for (p = PyString_AS_STRING(self); p < e; p++)
-    if (*p == '\t') {
-        if (tabsize > 0) {
-            i = tabsize - (j % tabsize);
-            j += i;
-            while (i--) {
-                if (q >= qe)
-                    goto overflow2;
-                *q++ = ' ';
+    for (p = PyString_AS_STRING(self); p < e; p++) {
+        if (*p == '\t') {
+            if (tabsize > 0) {
+                i = tabsize - (j % tabsize);
+                j += i;
+                while (i--) {
+                    if (q >= qe)
+                        goto overflow2;
+                    *q++ = ' ';
+                }
             }
         }
-    }
-    else {
-        if (q >= qe)
-            goto overflow2;
-        *q++ = *p;
-        j++;
-        if (*p == '\n' || *p == '\r')
-            j = 0;
+        else {
+            if (q >= qe)
+                goto overflow2;
+            *q++ = *p;
+            j++;
+            if (*p == '\n' || *p == '\r')
+                j = 0;
+        }
     }
 
     return u;
@@ -3545,7 +3551,7 @@ string_istitle(PyStringObject *self, PyObject *uncased)
 
 
 PyDoc_STRVAR(splitlines__doc__,
-"S.splitlines([keepends]) -> list of strings\n\
+"S.splitlines(keepends=False) -> list of strings\n\
 \n\
 Return a list of the lines in S, breaking at line boundaries.\n\
 Line breaks are not included in the resulting list unless keepends\n\
@@ -3799,7 +3805,7 @@ PyTypeObject PyBaseString_Type = {
 };
 
 PyDoc_STRVAR(string_doc,
-"str(object) -> string\n\
+"str(object='') -> string\n\
 \n\
 Return a nice string representation of the object.\n\
 If the argument is a string, the return value is the same object.");
@@ -3855,8 +3861,7 @@ PyString_Concat(register PyObject **pv, register PyObject *w)
     if (*pv == NULL)
         return;
     if (w == NULL || !PyString_Check(*pv)) {
-        Py_DECREF(*pv);
-        *pv = NULL;
+        Py_CLEAR(*pv);
         return;
     }
     v = string_concat((PyStringObject *) *pv, w);
@@ -4254,8 +4259,8 @@ PyString_Format(PyObject *format, PyObject *args)
         arglen = -1;
         argidx = -2;
     }
-    if (Py_TYPE(args)->tp_as_mapping && !PyTuple_Check(args) &&
-        !PyObject_TypeCheck(args, &PyBaseString_Type))
+    if (Py_TYPE(args)->tp_as_mapping && Py_TYPE(args)->tp_as_mapping->mp_subscript &&
+        !PyTuple_Check(args) && !PyObject_TypeCheck(args, &PyBaseString_Type))
         dict = args;
     while (--fmtcnt >= 0) {
         if (*fmt != '%') {
@@ -4355,7 +4360,9 @@ PyString_Format(PyObject *format, PyObject *args)
                                     "* wants int");
                     goto error;
                 }
-                width = PyInt_AsLong(v);
+                width = PyInt_AsSsize_t(v);
+                if (width == -1 && PyErr_Occurred())
+                    goto error;
                 if (width < 0) {
                     flags |= F_LJUST;
                     width = -width;
@@ -4369,7 +4376,7 @@ PyString_Format(PyObject *format, PyObject *args)
                     c = Py_CHARMASK(*fmt++);
                     if (!isdigit(c))
                         break;
-                    if ((width*10) / 10 != width) {
+                    if (width > (PY_SSIZE_T_MAX - ((int)c - '0')) / 10) {
                         PyErr_SetString(
                             PyExc_ValueError,
                             "width too big");
@@ -4392,7 +4399,9 @@ PyString_Format(PyObject *format, PyObject *args)
                             "* wants int");
                         goto error;
                     }
-                    prec = PyInt_AsLong(v);
+                    prec = _PyInt_AsInt(v);
+                    if (prec == -1 && PyErr_Occurred())
+                        goto error;
                     if (prec < 0)
                         prec = 0;
                     if (--fmtcnt >= 0)
@@ -4404,7 +4413,7 @@ PyString_Format(PyObject *format, PyObject *args)
                         c = Py_CHARMASK(*fmt++);
                         if (!isdigit(c))
                             break;
-                        if ((prec*10) / 10 != prec) {
+                        if (prec > (INT_MAX - ((int)c - '0')) / 10) {
                             PyErr_SetString(
                                 PyExc_ValueError,
                                 "prec too big");
@@ -4489,7 +4498,10 @@ PyString_Format(PyObject *format, PyObject *args)
                     }
                     else {
                         iobj = PyNumber_Int(v);
-                        if (iobj==NULL) iobj = PyNumber_Long(v);
+                        if (iobj==NULL) {
+                            PyErr_Clear();
+                            iobj = PyNumber_Long(v);
+                        }
                     }
                     if (iobj!=NULL) {
                         if (PyInt_Check(iobj)) {
@@ -4779,12 +4791,9 @@ void
 PyString_Fini(void)
 {
     int i;
-    for (i = 0; i < UCHAR_MAX + 1; i++) {
-        Py_XDECREF(characters[i]);
-        characters[i] = NULL;
-    }
-    Py_XDECREF(nullstring);
-    nullstring = NULL;
+    for (i = 0; i < UCHAR_MAX + 1; i++)
+        Py_CLEAR(characters[i]);
+    Py_CLEAR(nullstring);
 }
 
 void _Py_ReleaseInternedStrings(void)
@@ -4834,6 +4843,5 @@ void _Py_ReleaseInternedStrings(void)
                     "mortal/immortal\n", mortal_size, immortal_size);
     Py_DECREF(keys);
     PyDict_Clear(interned);
-    Py_DECREF(interned);
-    interned = NULL;
+    Py_CLEAR(interned);
 }

@@ -753,7 +753,8 @@ Py2Reg(PyObject *value, DWORD typ, BYTE **retDataBuf, DWORD *retDataSize)
     Py_ssize_t i,j;
     switch (typ) {
         case REG_DWORD:
-            if (value != Py_None && !PyInt_Check(value))
+            if (value != Py_None &&
+                !(PyInt_Check(value) || PyLong_Check(value)))
                 return FALSE;
             *retDataBuf = (BYTE *)PyMem_NEW(DWORD, 1);
             if (*retDataBuf==NULL){
@@ -765,10 +766,10 @@ Py2Reg(PyObject *value, DWORD typ, BYTE **retDataBuf, DWORD *retDataSize)
                 DWORD zero = 0;
                 memcpy(*retDataBuf, &zero, sizeof(DWORD));
             }
-            else
-                memcpy(*retDataBuf,
-                       &PyInt_AS_LONG((PyIntObject *)value),
-                       sizeof(DWORD));
+            else {
+                DWORD d = PyLong_AsUnsignedLong(value);
+                memcpy(*retDataBuf, &d, sizeof(DWORD));
+            }
             break;
         case REG_SZ:
         case REG_EXPAND_SZ:
@@ -882,12 +883,14 @@ Py2Reg(PyObject *value, DWORD typ, BYTE **retDataBuf, DWORD *retDataSize)
         /* ALSO handle ALL unknown data types here.  Even if we can't
            support it natively, we should handle the bits. */
         default:
-            if (value == Py_None)
+            if (value == Py_None) {
                 *retDataSize = 0;
+                *retDataBuf = NULL;
+            }
             else {
                 void *src_buf;
                 PyBufferProcs *pb = value->ob_type->tp_as_buffer;
-                if (pb==NULL) {
+                if (pb == NULL || pb->bf_getreadbuffer == NULL) {
                     PyErr_Format(PyExc_TypeError,
                         "Objects of type '%s' can not "
                         "be used as binary registry values",
@@ -895,9 +898,11 @@ Py2Reg(PyObject *value, DWORD typ, BYTE **retDataBuf, DWORD *retDataSize)
                     return FALSE;
                 }
                 *retDataSize = (*pb->bf_getreadbuffer)(value, 0, &src_buf);
-                *retDataBuf = (BYTE *)PyMem_NEW(char,
-                                                *retDataSize);
-                if (*retDataBuf==NULL){
+                if (*retDataSize < 0) {
+                    return FALSE;
+                }
+                *retDataBuf = (BYTE *)PyMem_NEW(char, *retDataSize);
+                if (*retDataBuf == NULL){
                     PyErr_NoMemory();
                     return FALSE;
                 }
@@ -917,9 +922,9 @@ Reg2Py(char *retDataBuf, DWORD retDataSize, DWORD typ)
     switch (typ) {
         case REG_DWORD:
             if (retDataSize == 0)
-                obData = Py_BuildValue("i", 0);
+                obData = Py_BuildValue("k", 0);
             else
-                obData = Py_BuildValue("i",
+                obData = Py_BuildValue("k",
                                        *(int *)retDataBuf);
             break;
         case REG_SZ:
@@ -947,8 +952,10 @@ Reg2Py(char *retDataBuf, DWORD retDataSize, DWORD typ)
 
                 fixupMultiSZ(str, retDataBuf, retDataSize);
                 obData = PyList_New(s);
-                if (obData == NULL)
+                if (obData == NULL) {
+                    free(str);
                     return NULL;
+                }
                 for (index = 0; index < s; index++)
                 {
                     size_t len = _mbstrlen(str[index]);
@@ -956,6 +963,7 @@ Reg2Py(char *retDataBuf, DWORD retDataSize, DWORD typ)
                         PyErr_SetString(PyExc_OverflowError,
                             "registry string is too long for a Python string");
                         Py_DECREF(obData);
+                        free(str);
                         return NULL;
                     }
                     PyList_SetItem(obData,

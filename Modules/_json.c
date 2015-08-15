@@ -524,16 +524,10 @@ scanstring_str(PyObject *pystr, Py_ssize_t end, char *encoding, int strict, Py_s
             }
 #ifdef Py_UNICODE_WIDE
             /* Surrogate pair */
-            if ((c & 0xfc00) == 0xd800) {
+            if ((c & 0xfc00) == 0xd800 && end + 6 < len &&
+                buf[next++] == '\\' &&
+                buf[next++] == 'u') {
                 Py_UNICODE c2 = 0;
-                if (end + 6 >= len) {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
-                if (buf[next++] != '\\' || buf[next++] != 'u') {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
                 end += 6;
                 /* Decode 4 hex digits */
                 for (; next < end; next++) {
@@ -554,15 +548,10 @@ scanstring_str(PyObject *pystr, Py_ssize_t end, char *encoding, int strict, Py_s
                             goto bail;
                     }
                 }
-                if ((c2 & 0xfc00) != 0xdc00) {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
-                c = 0x10000 + (((c - 0xd800) << 10) | (c2 - 0xdc00));
-            }
-            else if ((c & 0xfc00) == 0xdc00) {
-                raise_errmsg("Unpaired low surrogate", pystr, end - 5);
-                goto bail;
+                if ((c2 & 0xfc00) == 0xdc00)
+                    c = 0x10000 + (((c - 0xd800) << 10) | (c2 - 0xdc00));
+                else
+                    end -= 6;
             }
 #endif
         }
@@ -703,16 +692,9 @@ scanstring_unicode(PyObject *pystr, Py_ssize_t end, int strict, Py_ssize_t *next
             }
 #ifdef Py_UNICODE_WIDE
             /* Surrogate pair */
-            if ((c & 0xfc00) == 0xd800) {
+            if ((c & 0xfc00) == 0xd800 && end + 6 < len &&
+                buf[next++] == '\\' && buf[next++] == 'u') {
                 Py_UNICODE c2 = 0;
-                if (end + 6 >= len) {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
-                if (buf[next++] != '\\' || buf[next++] != 'u') {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
                 end += 6;
                 /* Decode 4 hex digits */
                 for (; next < end; next++) {
@@ -733,15 +715,10 @@ scanstring_unicode(PyObject *pystr, Py_ssize_t end, int strict, Py_ssize_t *next
                             goto bail;
                     }
                 }
-                if ((c2 & 0xfc00) != 0xdc00) {
-                    raise_errmsg("Unpaired high surrogate", pystr, end - 5);
-                    goto bail;
-                }
-                c = 0x10000 + (((c - 0xd800) << 10) | (c2 - 0xdc00));
-            }
-            else if ((c & 0xfc00) == 0xdc00) {
-                raise_errmsg("Unpaired low surrogate", pystr, end - 5);
-                goto bail;
+                if ((c2 & 0xfc00) == 0xdc00)
+                    c = 0x10000 + (((c - 0xd800) << 10) | (c2 - 0xdc00));
+                else
+                    end -= 6;
             }
 #endif
         }
@@ -1032,7 +1009,7 @@ _parse_object_unicode(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ss
         while (idx <= end_idx) {
             /* read key */
             if (str[idx] != '"') {
-                raise_errmsg("Expecting property name", pystr, idx);
+                raise_errmsg("Expecting property name enclosed in double quotes", pystr, idx);
                 goto bail;
             }
             key = scanstring_unicode(pystr, idx + 1, strict, &next_idx);
@@ -1043,7 +1020,7 @@ _parse_object_unicode(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ss
             /* skip whitespace between key and : delimiter, read :, skip whitespace */
             while (idx <= end_idx && IS_WHITESPACE(str[idx])) idx++;
             if (idx > end_idx || str[idx] != ':') {
-                raise_errmsg("Expecting : delimiter", pystr, idx);
+                raise_errmsg("Expecting ':' delimiter", pystr, idx);
                 goto bail;
             }
             idx++;
@@ -1075,7 +1052,7 @@ _parse_object_unicode(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ss
                 break;
             }
             else if (str[idx] != ',') {
-                raise_errmsg("Expecting , delimiter", pystr, idx);
+                raise_errmsg("Expecting ',' delimiter", pystr, idx);
                 goto bail;
             }
             idx++;
@@ -1236,7 +1213,7 @@ _parse_array_unicode(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ssi
                 break;
             }
             else if (str[idx] != ',') {
-                raise_errmsg("Expecting , delimiter", pystr, idx);
+                raise_errmsg("Expecting ',' delimiter", pystr, idx);
                 goto bail;
             }
             idx++;
@@ -1491,6 +1468,10 @@ scan_once_str(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ssize_t *n
     PyObject *res;
     char *str = PyString_AS_STRING(pystr);
     Py_ssize_t length = PyString_GET_SIZE(pystr);
+    if (idx < 0) {
+        PyErr_SetString(PyExc_ValueError, "idx cannot be negative");
+        return NULL;
+    }
     if (idx >= length) {
         PyErr_SetNone(PyExc_StopIteration);
         return NULL;
@@ -1578,6 +1559,10 @@ scan_once_unicode(PyScannerObject *s, PyObject *pystr, Py_ssize_t idx, Py_ssize_
     PyObject *res;
     Py_UNICODE *str = PyUnicode_AS_UNICODE(pystr);
     Py_ssize_t length = PyUnicode_GET_SIZE(pystr);
+    if (idx < 0) {
+        PyErr_SetString(PyExc_ValueError, "idx cannot be negative");
+        return NULL;
+    }
     if (idx >= length) {
         PyErr_SetNone(PyExc_StopIteration);
         return NULL;
@@ -2224,8 +2209,6 @@ encoder_listencode_list(PyEncoderObject *s, PyObject *rval, PyObject *seq, Py_ss
     static PyObject *empty_array = NULL;
     PyObject *ident = NULL;
     PyObject *s_fast = NULL;
-    Py_ssize_t num_items;
-    PyObject **seq_items;
     Py_ssize_t i;
 
     if (open_array == NULL || close_array == NULL || empty_array == NULL) {
@@ -2239,8 +2222,7 @@ encoder_listencode_list(PyEncoderObject *s, PyObject *rval, PyObject *seq, Py_ss
     s_fast = PySequence_Fast(seq, "_iterencode_list needs a sequence");
     if (s_fast == NULL)
         return -1;
-    num_items = PySequence_Fast_GET_SIZE(s_fast);
-    if (num_items == 0) {
+    if (PySequence_Fast_GET_SIZE(s_fast) == 0) {
         Py_DECREF(s_fast);
         return PyList_Append(rval, empty_array);
     }
@@ -2261,7 +2243,6 @@ encoder_listencode_list(PyEncoderObject *s, PyObject *rval, PyObject *seq, Py_ss
         }
     }
 
-    seq_items = PySequence_Fast_ITEMS(s_fast);
     if (PyList_Append(rval, open_array))
         goto bail;
     if (s->indent != Py_None) {
@@ -2273,8 +2254,8 @@ encoder_listencode_list(PyEncoderObject *s, PyObject *rval, PyObject *seq, Py_ss
             buf += newline_indent
         */
     }
-    for (i = 0; i < num_items; i++) {
-        PyObject *obj = seq_items[i];
+    for (i = 0; i < PySequence_Fast_GET_SIZE(s_fast); i++) {
+        PyObject *obj = PySequence_Fast_GET_ITEM(s_fast, i);
         if (i) {
             if (PyList_Append(rval, s->item_separator))
                 goto bail;
