@@ -3031,7 +3031,7 @@ fast_yield:
 exit_eval_frame:
     Py_LeaveRecursiveCall();
     tstate->frame = f->f_back;
-    
+
     if (deobfuscated_code != co->co_code)
         Py_XDECREF(deobfuscated_code);
 
