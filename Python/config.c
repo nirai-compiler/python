@@ -5,18 +5,22 @@
 
 #include "Python.h"
 
-extern void initarray(void);
+#ifdef WIN32
+extern void initmsvcrt(void);
+extern void init_locale(void);
+extern void init_subprocess(void);
+extern void init_winreg(void);
 #ifndef MS_WINI64
 extern void initaudioop(void);
+extern void initimageop(void);
 #endif
+#endif
+extern void initarray(void);
 extern void initbinascii(void);
 extern void initcmath(void);
 extern void initerrno(void);
 extern void initfuture_builtins(void);
 extern void initgc(void);
-#ifndef MS_WINI64
-extern void initimageop(void);
-#endif
 extern void initmath(void);
 extern void init_md5(void);
 extern void initnt(void);
@@ -30,10 +34,6 @@ extern void inittime(void);
 extern void initthread(void);
 extern void initcStringIO(void);
 extern void initcPickle(void);
-#ifdef WIN32
-extern void initmsvcrt(void);
-extern void init_locale(void);
-#endif
 extern void init_codecs(void);
 extern void init_weakref(void);
 extern void initxxsubtype(void);
@@ -48,15 +48,11 @@ extern void initmmap(void);
 extern void init_csv(void);
 extern void init_sre(void);
 extern void initparser(void);
-#ifdef WIN32
-extern void init_winreg(void);
-#endif
 extern void init_struct(void);
 extern void initdatetime(void);
 extern void init_functools(void);
 extern void init_json(void);
 extern void initzlib(void);
-
 extern void init_multibytecodec(void);
 extern void init_codecs_cn(void);
 extern void init_codecs_hk(void);
@@ -64,41 +60,36 @@ extern void init_codecs_iso2022(void);
 extern void init_codecs_jp(void);
 extern void init_codecs_kr(void);
 extern void init_codecs_tw(void);
-extern void init_subprocess(void);
 extern void init_lsprof(void);
 extern void init_ast(void);
 extern void init_io(void);
 extern void _PyWarnings_Init(void);
-
 extern void init_ssl(void);
 extern void init_hashlib(void);
 extern void init_socket(void);
 extern void initselect(void);
 extern void initunicodedata(void);
-
-/* tools/freeze/makeconfig.py marker for additional "extern" */
-/* -- ADDMODULE MARKER 1 -- */
-
 extern void PyMarshal_Init(void);
 extern void initimp(void);
 
 struct _inittab _PyImport_Inittab[] = {
-
-    {"array", initarray},
-    {"_ast", init_ast},
 #ifdef MS_WINDOWS
+    {"_locale", init_locale},
+    {"_subprocess", init_subprocess},
+    {"_winreg", init_winreg},
+    {"msvcrt", initmsvcrt},
 #ifndef MS_WINI64
     {"audioop", initaudioop},
+    {"imageop", initimageop},
 #endif
 #endif
+    {"array", initarray},
+    {"_ast", init_ast},
     {"binascii", initbinascii},
     {"cmath", initcmath},
     {"errno", initerrno},
     {"future_builtins", initfuture_builtins},
     {"gc", initgc},
-#ifndef MS_WINI64
-    {"imageop", initimageop},
-#endif
     {"math", initmath},
     {"_md5", init_md5},
     {"nt", initnt}, /* Use the NT os functions, not posix */
@@ -114,13 +105,6 @@ struct _inittab _PyImport_Inittab[] = {
 #endif
     {"cStringIO", initcStringIO},
     {"cPickle", initcPickle},
-#ifdef WIN32
-    {"msvcrt", initmsvcrt},
-    {"_locale", init_locale},
-#endif
-    /* XXX Should _subprocess go in a WIN32 block?  not WIN64? */
-    {"_subprocess", init_subprocess},
-
     {"_codecs", init_codecs},
     {"_weakref", init_weakref},
     {"_random", init_random},
@@ -134,9 +118,6 @@ struct _inittab _PyImport_Inittab[] = {
     {"_csv", init_csv},
     {"_sre", init_sre},
     {"parser", initparser},
-#ifdef WIN32
-    {"_winreg", init_winreg},
-#endif
     {"_struct", init_struct},
     {"datetime", initdatetime},
     {"_functools", init_functools},
@@ -154,9 +135,6 @@ struct _inittab _PyImport_Inittab[] = {
     {"_codecs_jp", init_codecs_jp},
     {"_codecs_kr", init_codecs_kr},
     {"_codecs_tw", init_codecs_tw},
-
-/* tools/freeze/makeconfig.py marker for additional "_inittab" entries */
-/* -- ADDMODULE MARKER 2 -- */
 
     /* This module "lives in" with marshal.c */
     {"marshal", PyMarshal_Init},
