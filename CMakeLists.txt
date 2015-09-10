@@ -7,6 +7,8 @@ if(WIN32)
 	add_definitions(-D_USRDLL)
 	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 	add_definitions(-D_WINSOCK_DEPRECATED_NO_WARNINGS)
+    include_directories(../panda3d/thirdparty/win-libs-vc10/openssl/include)
+    include_directories(../panda3d/thirdparty/win-libs-vc10/zlib/include)
 endif()
 
 add_definitions(-DNDEBUG)
@@ -221,9 +223,6 @@ include_directories(Python)
 if(WIN32)
     include_directories(PC)
 endif()
-
-include_directories(../panda3d/thirdparty/win-libs-vc10/openssl/include)
-include_directories(../panda3d/thirdparty/win-libs-vc10/zlib/include)
 
 source_group("Objects" FILES ${OBJECTS_FILES})
 source_group("Parser" FILES ${PARSER_FILES})
