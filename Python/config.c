@@ -15,6 +15,8 @@ extern void init_winreg(void);
 extern void initaudioop(void);
 extern void initimageop(void);
 #endif
+#else
+extern void initposix(void);
 #endif
 extern void initarray(void);
 extern void initbinascii(void);
@@ -83,6 +85,8 @@ struct _inittab _PyImport_Inittab[] = {
     {"audioop", initaudioop},
     {"imageop", initimageop},
 #endif
+#else
+    {"posix", initposix},
 #endif
     {"array", initarray},
     {"_ast", init_ast},
