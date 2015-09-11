@@ -7,6 +7,7 @@
 
 #ifdef WIN32
 extern void initmsvcrt(void);
+extern void initnt(void);
 extern void init_locale(void);
 extern void init_subprocess(void);
 extern void init_winreg(void);
@@ -23,7 +24,6 @@ extern void initfuture_builtins(void);
 extern void initgc(void);
 extern void initmath(void);
 extern void init_md5(void);
-extern void initnt(void);
 extern void initoperator(void);
 extern void initsignal(void);
 extern void init_sha(void);
@@ -78,6 +78,7 @@ struct _inittab _PyImport_Inittab[] = {
     {"_subprocess", init_subprocess},
     {"_winreg", init_winreg},
     {"msvcrt", initmsvcrt},
+    {"nt", initnt},
 #ifndef MS_WINI64
     {"audioop", initaudioop},
     {"imageop", initimageop},
@@ -92,7 +93,6 @@ struct _inittab _PyImport_Inittab[] = {
     {"gc", initgc},
     {"math", initmath},
     {"_md5", init_md5},
-    {"nt", initnt}, /* Use the NT os functions, not posix */
     {"operator", initoperator},
     {"signal", initsignal},
     {"_sha", init_sha},
@@ -122,7 +122,6 @@ struct _inittab _PyImport_Inittab[] = {
     {"datetime", initdatetime},
     {"_functools", init_functools},
     {"_json", init_json},
-
     {"xxsubtype", initxxsubtype},
     {"zipimport", initzipimport},
     {"zlib", initzlib},
