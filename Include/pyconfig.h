@@ -6,8 +6,8 @@
 #define Py_NO_ENABLE_SHARED
 #endif
 
-#ifndef Py_ENABLE_SHARED
-#define Py_ENABLE_SHARED 0
+#ifdef Py_ENABLE_SHARED
+#undef Py_ENABLE_SHARED
 #endif
 
 #ifdef _WIN32

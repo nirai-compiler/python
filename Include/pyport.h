@@ -757,6 +757,7 @@ extern int fdatasync(int);
 
 /* only get special linkage if built as shared or platform is Cygwin */
 #if defined(Py_ENABLE_SHARED) || defined(__CYGWIN__)
+#       error "PY_ENABLE_SHARED cannot be defined!"
 #       if defined(HAVE_DECLSPEC_DLL)
 #               ifdef Py_BUILD_CORE
 #                       define PyAPI_FUNC(RTYPE) __declspec(dllexport) RTYPE
