@@ -162,7 +162,6 @@ set(MODULES_FILES
     Modules/parsermodule.c
     Modules/posixmodule.c
     Modules/puremodule.c
-    Modules/python.c
     Modules/rotatingtree.c
     Modules/selectmodule.c
     Modules/sha256module.c
