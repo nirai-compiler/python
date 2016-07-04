@@ -1195,7 +1195,9 @@
 /* #undef _UINT64_T */
 
 /* Define to the level of X/Open that your system supports */
+#ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 600
+#endif
 
 /* Define to activate Unix95-and-earlier features */
 #define _XOPEN_SOURCE_EXTENDED 1
