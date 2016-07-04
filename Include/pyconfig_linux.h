@@ -180,7 +180,7 @@
 #define HAVE_DUP2 1
 
 /* Defined when any dynamic module loading is enabled. */
-#define HAVE_DYNAMIC_LOADING 1
+/* #define HAVE_DYNAMIC_LOADING */
 
 /* Define if you have the 'epoll' functions. */
 #define HAVE_EPOLL 1
