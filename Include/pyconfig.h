@@ -15,10 +15,10 @@
 
 #elif __APPLE__
     #include "pyconfig_mac.h"
-/*
+
 #elif __linux
     #include "pyconfig_linux.h"
-*/
+
 #else
     #error "No pyconfig for your OS could be found."
 #endif
