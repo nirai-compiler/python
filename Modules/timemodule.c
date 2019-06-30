@@ -87,6 +87,12 @@ static long main_thread;
 #include <kernel/OS.h>
 #endif
 
+#if defined(_MSC_VER) && _MSC_VER >= 1900
+#define timezone _timezone
+#define tzname _tzname
+#define daylight _daylight
+#endif
+
 #ifdef RISCOS
 extern int riscos_sleep(double);
 #endif
