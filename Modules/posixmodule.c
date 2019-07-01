@@ -272,6 +272,7 @@ extern int lstat(const char *, struct stat *);
 #include "osdefs.h"
 #include <malloc.h>
 #include <windows.h>
+#include <malloc.h>
 #include <shellapi.h>   /* for ShellExecute() */
 #define popen   _popen
 #define pclose  _pclose
@@ -473,8 +474,28 @@ OverflowUp:
 }
 #endif /* MS_WINDOWS */
 
+#ifdef _MSC_VER
+#if _MSC_VER >= 1900
 
-#if defined _MSC_VER && _MSC_VER >= 1400
+/* This function lets the Windows CRT validate the file handle without
+   terminating the process if it's invalid. */
+int
+_PyVerify_fd(int fd)
+{
+    intptr_t osh;
+    /* Fast check for the only condition we know */
+    if (fd < 0) {
+        _set_errno(EBADF);
+        return 0;
+    }
+    osh = _get_osfhandle(fd);
+    return osh != (intptr_t)-1;
+}
+
+#define _PyVerify_fd_dup2(fd1, fd2) (_PyVerify_fd(fd1) && (fd2) >= 0)
+
+#elif _MSC_VER >= 1400
+
 /* Microsoft CRT in VS2005 and higher will verify that a filehandle is
  * valid and raise an assertion if it isn't.
  * Normally, an invalid fd is likely to be a C program error and therefore
@@ -498,18 +519,19 @@ OverflowUp:
 /* The actual size of the structure is determined at runtime.
  * Only the first items must be present.
  */
+
 typedef struct {
     intptr_t osfhnd;
     char osfile;
 } my_ioinfo;
 
 extern __declspec(dllimport) char * __pioinfo[];
-#define IOINFO_L2E 5
 #define IOINFO_ARRAY_ELTS   (1 << IOINFO_L2E)
-#define IOINFO_ARRAYS 64
 #define _NHANDLE_           (IOINFO_ARRAYS * IOINFO_ARRAY_ELTS)
 #define FOPEN 0x01
 #define _NO_CONSOLE_FILENO (intptr_t)-2
+#define IOINFO_L2E 5
+#define IOINFO_ARRAYS 64
 
 /* This function emulates what the windows CRT does to validate file handles */
 int
@@ -566,6 +588,8 @@ _PyVerify_fd_dup2(int fd1, int fd2)
 /* dummy version. _PyVerify_fd() is already defined in fileobject.h */
 #define _PyVerify_fd_dup2(A, B) (1)
 #endif
+
+#endif /* defined _MSC_VER */
 
 /* Return a dictionary corresponding to the POSIX environment table */
 #if defined(WITH_NEXT_FRAMEWORK) || (defined(__APPLE__) && defined(Py_ENABLE_SHARED))
@@ -1169,14 +1193,10 @@ win32_fstat(int file_number, struct win32_stat *result)
 
     h = (HANDLE)_get_osfhandle(file_number);
 
-    /* Protocol violation: we explicitly clear errno, instead of
-       setting it to a POSIX error. Callers should use GetLastError. */
     errno = 0;
 
     if (h == INVALID_HANDLE_VALUE) {
-        /* This is really a C library error (invalid file handle).
-           We set the Win32 error to the closes one matching. */
-        SetLastError(ERROR_INVALID_HANDLE);
+        errno = EBADF;
         return -1;
     }
     memset(result, 0, sizeof(*result));
@@ -1185,6 +1205,7 @@ win32_fstat(int file_number, struct win32_stat *result)
     if (type == FILE_TYPE_UNKNOWN) {
         DWORD error = GetLastError();
         if (error != 0) {
+        errno = EINVAL;
         return -1;
         }
         /* else: valid but unknown file */
@@ -1199,6 +1220,7 @@ win32_fstat(int file_number, struct win32_stat *result)
     }
 
     if (!GetFileInformationByHandle(h, &info)) {
+        errno = EINVAL;
         return -1;
     }
 

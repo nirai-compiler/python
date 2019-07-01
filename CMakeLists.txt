@@ -79,6 +79,7 @@ if(WIN32)
         PC/winsound.c
         PC/_subprocess.c
         PC/_winreg.c
+		PC/invalid_parameter_handler.c
     )
 else()
     set(PC_FILES) # Empty

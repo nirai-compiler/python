@@ -87,12 +87,6 @@ static long main_thread;
 #include <kernel/OS.h>
 #endif
 
-#if defined(_MSC_VER) && _MSC_VER >= 1900
-#define timezone _timezone
-#define tzname _tzname
-#define daylight _daylight
-#endif
-
 #ifdef RISCOS
 extern int riscos_sleep(double);
 #endif
@@ -716,7 +710,7 @@ inittimezone(PyObject *m) {
 #ifdef PYOS_OS2
     PyModule_AddIntConstant(m, "timezone", _timezone);
 #else /* !PYOS_OS2 */
-    PyModule_AddIntConstant(m, "timezone", timezone);
+    PyModule_AddIntConstant(m, "timezone", _timezone);
 #endif /* PYOS_OS2 */
 #ifdef HAVE_ALTZONE
     PyModule_AddIntConstant(m, "altzone", altzone);
@@ -724,7 +718,7 @@ inittimezone(PyObject *m) {
 #ifdef PYOS_OS2
     PyModule_AddIntConstant(m, "altzone", _timezone-3600);
 #else /* !PYOS_OS2 */
-    PyModule_AddIntConstant(m, "altzone", timezone-3600);
+    PyModule_AddIntConstant(m, "altzone", _timezone-3600);
 #endif /* PYOS_OS2 */
 #endif
     PyModule_AddIntConstant(m, "daylight", daylight);

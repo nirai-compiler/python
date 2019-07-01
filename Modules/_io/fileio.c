@@ -159,7 +159,7 @@ check_fd(int fd)
 {
 #if defined(HAVE_FSTAT)
     struct stat buf;
-    if (!_PyVerify_fd(fd) || (fstat(fd, &buf) < 0 && errno == EBADF)) {
+    if (fstat(fd, &buf) < 0 && errno == EBADF) {
         PyObject *exc;
         char *msg = strerror(EBADF);
         exc = PyObject_CallFunction(PyExc_OSError, "(is)",
